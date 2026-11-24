@@ -6,7 +6,7 @@ Each packet is self-contained: complete current source file(s) for the claim und
 If you can read this, please cite concrete file/section-level findings in your review; if you cannot open the material, say so explicitly instead of reviewing from names or summaries.
 
 ## Files
-- oliver-media-panel-evidence.md — MediaPanel/Media seek work at pinned commit (supersedes the 56974b4 packet; panel changed in 1383c7b, 492a611, 6ac53f4)
-- oliver-osd-evidence.md — services/Osd.qml attach-burst coalescing + brightness availability, with probes/assertions (Osd.qml unchanged since 56974b4)
-- omar-delta-71cfadf-to-56974b4.diff — the delta Omar is assessing, with superseding-fix notes
-- delta-56974b4-to-6ac53f4.diff — all commits after that delta (seek invalidation, notif walk clearing, hint visibility, track identity)
+- review-media.txt (packet oliver-media-panel-evidence.md) — MediaPanel/Media seek work at pinned commit (supersedes the 56974b4 packet; panel changed in 1383c7b, 492a611, 6ac53f4)
+- review-osd.txt (packet oliver-osd-evidence.md) — services/Osd.qml attach-burst coalescing + brightness availability, with probes/assertions (Osd.qml unchanged since 56974b4)
+- review-delta-first.txt (packet omar-delta-71cfadf-to-56974b4.diff) — the delta Omar is assessing, with superseding-fix notes
+- review-delta-latest.txt (packet delta-56974b4-to-6ac53f4.diff) — all commits after that delta (seek invalidation, notif walk clearing, hint visibility, track identity)
