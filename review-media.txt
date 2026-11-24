@@ -1,0 +1,409 @@
+=== modules/media/MediaPanel.qml (complete, at commit 6ac53f4) ===
+import QtQuick
+import QtQuick.Controls
+import QtQuick.Layouts
+import Quickshell
+import Quickshell.Wayland
+import "../../config"
+import "../../services"
+import "../common"
+
+// The "island" panel: opened from the bar's media pill. Album art, track
+// info, seek bar and transport controls for the active MPRIS player.
+PanelWindow {
+    id: root
+    required property var modelData
+    screen: modelData
+
+    anchors {
+        top: true
+    }
+    margins {
+        top: Theme.barHeight + Theme.barMargin
+    }
+    exclusionMode: ExclusionMode.Ignore
+    WlrLayershell.layer: WlrLayer.Overlay
+    WlrLayershell.namespace: "radiant-media"
+    WlrLayershell.keyboardFocus: WlrKeyboardFocus.OnDemand
+    implicitWidth: Math.min(420, root.screen.width - Theme.barMargin * 2)
+    implicitHeight: content.implicitHeight + Theme.padding * 2
+    color: "transparent"
+    visible: UiState.mediaOpen && Media.hasPlayer
+
+    // Arrow keys seek 5s, clamped to the track; a player without seek or
+    // without a known length keeps the keys inert (clamping to length 0
+    // would collapse every seek to the track start). Rapid presses chain
+    // from the optimistic target until the player reports its position,
+    // because MPRIS position lags the seek request.
+    property real seekOptimistic: -1
+    // A reopened panel never carries a target from its previous opening.
+    onVisibleChanged: if (visible) root.seekOptimistic = -1
+    function keySeek(dir) {
+        if (!Media.canSeek || Media.length <= 0) return;
+        const base = seekOptimistic >= 0 ? seekOptimistic : Media.position;
+        const target = Math.max(0, Math.min(Media.length, base + dir * 5));
+        seekOptimistic = target;
+        Media.seekTo(target);
+    }
+    Connections {
+        target: Media
+        function onPositionChanged() {
+            if (root.seekOptimistic >= 0 && Math.abs(Media.position - root.seekOptimistic) <= 1.5)
+                root.seekOptimistic = -1;
+        }
+        // A pending optimistic target belongs to one track on one player:
+        // player, track or duration changes invalidate it, and a slider
+        // drag is an explicit reposition (see onMoved below).
+        function onActiveChanged() { root.seekOptimistic = -1; }
+        function onTitleChanged() { root.seekOptimistic = -1; }
+        function onArtistChanged() { root.seekOptimistic = -1; }
+        function onLengthChanged() { root.seekOptimistic = -1; }
+    }
+    // Real track identity: Quickshell emits postTrackChanged when the MPRIS
+    // trackid/url/title changes, so identical-metadata consecutive tracks
+    // still invalidate the target whenever the player reports a new trackid.
+    Connections {
+        target: Media.active
+        function onPostTrackChanged() { root.seekOptimistic = -1; }
+    }
+    contentItem {
+        focus: true
+        Keys.onEscapePressed: UiState.closeAll()
+        Keys.onLeftPressed: root.keySeek(-1)
+        Keys.onRightPressed: root.keySeek(1)
+    }
+
+    // MPRIS position only updates when the player reports it; nudge it once
+    // a second while playing (same trick end-4's bar uses).
+    Timer {
+        interval: 1000
+        running: root.visible && Media.playing
+        repeat: true
+        onTriggered: {
+            if (Media.hasPlayer)
+                Media.active.positionChanged();
+        }
+    }
+
+    function fmt(seconds) {
+        const s = Math.max(0, Math.round(seconds));
+        return Math.floor(s / 60) + ":" + ("0" + (s % 60)).slice(-2);
+    }
+
+    Rectangle {
+        anchors.fill: parent
+        radius: Theme.radiusLarge
+        color: Colors.surface
+        border.color: Colors.outline
+        border.width: 1
+
+        ColumnLayout {
+            id: content
+            anchors.fill: parent
+            anchors.margins: Theme.padding
+            spacing: Theme.spacing * 1.5
+
+            RowLayout {
+                Layout.fillWidth: true
+                Text {text: "Now playing";color: Colors.textDim;font {family:Theme.fontFamily;pixelSize:Theme.fontSizeSmall} Layout.fillWidth:true}
+                ActionButton {iconName:"close";Accessible.name:"Close media";tooltipText:"Close media";onClicked:UiState.closeAll()}
+            }
+            // Art + track info
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: Theme.spacing * 1.5
+
+                Rectangle {
+                    Layout.preferredWidth: 72
+                    Layout.preferredHeight: 72
+                    radius: Theme.radiusMedium
+                    color: Colors.surfaceVariant
+                    clip: true
+
+                    Image {
+                        anchors.fill: parent
+                        visible: Media.artUrl !== ""
+                        source: Media.artUrl
+                        fillMode: Image.PreserveAspectCrop
+                        asynchronous: true
+                    }
+                    UiIcon {
+                        anchors.centerIn: parent
+                        visible: Media.artUrl === ""
+                        name: "music"
+                        color: Colors.textDim
+                        font.pixelSize: 28
+                    }
+                }
+
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 2
+                    Text {
+                        text: Media.title !== "" ? Media.title : "Unknown track"
+                        color: Colors.text
+                        font.family: Theme.fontFamily
+                        font.pixelSize: Theme.fontSizeLarge
+                        font.weight: Font.DemiBold
+                        elide: Text.ElideRight
+                        Layout.fillWidth: true
+                    }
+                    Text {
+                        visible: text !== ""
+                        text: Media.artist
+                        color: Colors.textDim
+                        font.family: Theme.fontFamily
+                        font.pixelSize: Theme.fontSize
+                        elide: Text.ElideRight
+                        Layout.fillWidth: true
+                    }
+                }
+            }
+
+            // Spectrum visualizer (cava). Hidden entirely when cava is not
+            // installed, so the panel still looks right without it.
+            RowLayout {
+                visible: Cava.available
+                Layout.fillWidth: true
+                Layout.preferredHeight: 36
+                spacing: 3
+
+                Repeater {
+                    model: Cava.bars
+                    delegate: Item {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        Rectangle {
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            anchors.bottom: parent.bottom
+                            width: parent.width
+                            height: Math.max(2, (Cava.values[index] || 0) * parent.height)
+                            radius: width / 3
+                            color: Colors.primary
+                            Behavior on height {
+                                NumberAnimation { duration: 90 }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Seek bar with timestamps (hidden for streams with no length)
+            ColumnLayout {
+                visible: Media.length > 0
+                Layout.fillWidth: true
+                spacing: 0
+
+                Slider {
+                    id: seekSlider
+                    implicitHeight: 28
+                    Accessible.name: "Playback position"
+                    background: Rectangle {
+                        x: seekSlider.leftPadding; y: (seekSlider.height-height)/2
+                        width: seekSlider.availableWidth; height: 6; radius: 3
+                        color: Colors.surfaceVariant
+                        Rectangle {width: parent.width*seekSlider.visualPosition;height:6;radius:3;color:Colors.primary}
+                    }
+                    handle: Rectangle {
+                        x: seekSlider.leftPadding + seekSlider.visualPosition*(seekSlider.availableWidth-width)
+                        y: (seekSlider.height-height)/2
+                        implicitWidth: 12; implicitHeight: 12; radius: 6
+                        color: Colors.primary
+                    }
+                    Layout.fillWidth: true
+                    enabled: Media.canSeek
+                    opacity: enabled ? 1 : 0.45
+                    from: 0
+                    to: Math.max(Media.length, 1) // never a degenerate range
+                    // With the slider itself focused, forward arrows to the
+                    // same 5s seek: one press is one seek, identical to the
+                    // panel-level keys, never a native step plus a panel seek.
+                    Keys.onLeftPressed: { root.keySeek(-1); event.accepted = true; }
+                    Keys.onRightPressed: { root.keySeek(1); event.accepted = true; }
+                    onMoved: { root.seekOptimistic = -1; Media.seekTo(value); }
+                    Component.onCompleted: value = Media.position
+                    Connections {
+                        target: Media
+                        function onPositionChanged() {
+                            if (!seekSlider.pressed)
+                                seekSlider.value = Media.position;
+                        }
+                    }
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    Text {
+                        text: root.fmt(Media.position)
+                        color: Colors.textDim
+                        font.family: Theme.fontFamily
+                        font.pixelSize: Theme.fontSizeSmall
+                    }
+                    Item { Layout.fillWidth: true }
+                    Text {
+                        visible: Media.canSeek
+                        text: "← −5s · → +5s"
+                        color: Colors.textDim
+                        font.family: Theme.fontFamily
+                        font.pixelSize: Theme.fontSizeSmall
+                    }
+                    Item { Layout.fillWidth: true }
+                    Text {
+                        text: root.fmt(Media.length)
+                        color: Colors.textDim
+                        font.family: Theme.fontFamily
+                        font.pixelSize: Theme.fontSizeSmall
+                    }
+                }
+            }
+
+            // Transport controls
+            RowLayout {
+                Layout.alignment: Qt.AlignHCenter
+                spacing: Theme.spacing * 2
+
+                Repeater {
+                    id: transportRepeater
+                    model: [
+                        { icon: "previous", act: "prev" },
+                        { icon: Media.playing ? "pause" : "play", act: "play" },
+                        { icon: "next", act: "next" }
+                    ]
+                    delegate: ActionButton {
+                        required property var modelData
+                        implicitWidth: 44
+                        implicitHeight: 44
+                        // Reflect MPRIS capabilities: the service already
+                        // guards the calls, but an enabled-looking button
+                        // that silently does nothing is a dead control.
+                        enabled: modelData.act === "prev" ? Media.canGoPrevious
+                            : modelData.act === "next" ? Media.canGoNext : Media.canTogglePlaying
+                        iconName: modelData.icon
+                        selected: modelData.act === "play"
+                        Accessible.name: modelData.act === "prev" ? "Previous track" : modelData.act === "next" ? "Next track" : Media.playing ? "Pause" : "Play"
+                        tooltipText: Accessible.name
+                        onClicked: {
+                            if (modelData.act === "prev") Media.previous();
+                            else if (modelData.act === "next") Media.next();
+                            else Media.togglePlaying();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+=== services/Media.qml (complete, at commit 6ac53f4) ===
+pragma Singleton
+
+import Quickshell
+import Quickshell.Services.Mpris
+import QtQuick
+
+// MPRIS wiring: picks the playing player, falling back to the first one.
+Singleton {
+    id: root
+
+    readonly property list<MprisPlayer> players: Mpris.players.values
+
+    readonly property MprisPlayer active: {
+        for (const p of players) {
+            if (p.playbackState === MprisPlaybackState.Playing)
+                return p;
+        }
+        return players.length > 0 ? players[0] : null;
+    }
+
+    readonly property bool hasPlayer: active !== null
+    readonly property bool playing: hasPlayer && active.playbackState === MprisPlaybackState.Playing
+    readonly property string title: hasPlayer ? (active.trackTitle || "") : ""
+    readonly property string artist: hasPlayer ? (active.trackArtist || "") : ""
+    readonly property string artUrl: hasPlayer ? (active.trackArtUrl || "") : ""
+
+    // Position/length in seconds (0 when the player does not support them).
+    // position only updates when the player reports it - poll it with a
+    // Timer calling active.positionChanged() while playing (end-4 pattern).
+    readonly property real position: hasPlayer ? active.position : 0
+    readonly property real length: hasPlayer && active.lengthSupported ? active.length : 0
+    readonly property bool canSeek: hasPlayer && active.canSeek && active.positionSupported
+    readonly property bool canTogglePlaying: hasPlayer && active.canTogglePlaying
+    readonly property bool canGoNext: hasPlayer && active.canGoNext
+    readonly property bool canGoPrevious: hasPlayer && active.canGoPrevious
+
+    function seekTo(seconds) {
+        // Validate here, not only at call sites: NaN/Infinity and
+        // out-of-track values must never reach the player.
+        if (!canSeek || !isFinite(seconds))
+            return;
+        active.position = Math.max(0, length > 0 ? Math.min(length, seconds) : seconds);
+    }
+
+    readonly property string label: {
+        if (!hasPlayer)
+            return "";
+        const t = title !== "" ? title : "Unknown track";
+        return artist !== "" ? t + " · " + artist : t;
+    }
+
+    function togglePlaying() {
+        if (hasPlayer && active.canTogglePlaying)
+            active.togglePlaying();
+    }
+
+    function next() {
+        if (hasPlayer && active.canGoNext)
+            active.next();
+    }
+
+    function previous() {
+        if (hasPlayer && active.canGoPrevious)
+            active.previous();
+    }
+}
+
+=== tests/test-batch7.py: seek assertions (chain, lag, invalidation, track identity) ===
+ # rapid presses chain from the optimistic target while the player lags (MPRIS
+ # position only updates when the player reports it)
+ ipc('ccMedia','setLag','1');ipc('ccMedia','setPos','60');ipc('ccMedia','keySeek','1');ipc('ccMedia','keySeek','1');time.sleep(.3)
+ sk=json.loads(ipc('ccMedia','seekPos'));assert sk['log'][-2:]==[65,70],'rapid seeks chain optimistically: %s'%sk
+ ipc('ccMedia','setPos','71');time.sleep(.3)
+ ipc('ccMedia','keySeek','1');time.sleep(.3)
+ sk=json.loads(ipc('ccMedia','seekPos'));assert sk['log'][-1]==76,'once the player reports, seek bases on the reported position: %s'%sk
+ ipc('ccMedia','setLag','0');ipc('ccMedia','setPos','65');time.sleep(.2)
+ # unknown track length keeps the keys inert instead of collapsing every seek to 0
+ ipc('ccMedia','setLen','0');ipc('ccMedia','keySeek','1');time.sleep(.3)
+ sk=json.loads(ipc('ccMedia','seekPos'));assert sk['p']==65 and sk['log'][-1]==76,'no seek when the length is unknown: %s'%sk
+ ipc('ccMedia','setLen','240');time.sleep(.2)
+ # a pending optimistic target is invalidated by a track switch, a slider
+ # drag or a duration change: each must re-base the next arrow on the
+ # player's reported position, not the stale target
+ ipc('ccMedia','setLag','1');ipc('ccMedia','setPos','60');ipc('ccMedia','keySeek','1');time.sleep(.2)
+ ipc('ccMedia','setTitle','Other track');time.sleep(.2)
+ ipc('ccMedia','keySeek','1');time.sleep(.2)
+ sk=json.loads(ipc('ccMedia','seekPos'));assert sk['log'][-1]==65,'track switch invalidates the optimistic target: %s'%sk
+ ipc('ccMedia','keySeek','1');time.sleep(.2)
+ ipc('ccMedia','setLag','0');ipc('ccMedia','dragTo','100');time.sleep(.2)
+ ipc('ccMedia','keySeek','1');time.sleep(.2)
+ sk=json.loads(ipc('ccMedia','seekPos'));assert sk['log'][-1]==105,'slider drag invalidates the optimistic target: %s'%sk
+ ipc('ccMedia','setLag','1');ipc('ccMedia','setPos','60');ipc('ccMedia','keySeek','1');time.sleep(.2)
+ ipc('ccMedia','setLen','200');time.sleep(.2)
+ ipc('ccMedia','keySeek','1');time.sleep(.2)
+ sk=json.loads(ipc('ccMedia','seekPos'));assert sk['log'][-1]==65,'duration change invalidates the optimistic target: %s'%sk
+ ipc('ccMedia','setLag','1');ipc('ccMedia','setPos','60');ipc('ccMedia','keySeek','1');time.sleep(.2)
+ ipc('ccMedia','setArtist','Someone else');time.sleep(.2)
+ ipc('ccMedia','keySeek','1');time.sleep(.2)
+ sk=json.loads(ipc('ccMedia','seekPos'));assert sk['log'][-1]==65,'artist change invalidates the optimistic target: %s'%sk
+ ipc('ccMedia','keySeek','1');time.sleep(.2)
+ ipc('ccMedia','setOpen','0');time.sleep(.3);ipc('ccMedia','setOpen','1');time.sleep(.4)
+ ipc('ccMedia','keySeek','1');time.sleep(.2)
+ sk=json.loads(ipc('ccMedia','seekPos'));assert sk['log'][-1]==65,'reopening the panel drops a leftover optimistic target: %s'%sk
+ # real track identity: the MPRIS postTrackChanged signal invalidates even
+ # when title/artist/length all stay the same
+ ipc('ccMedia','setLag','1');ipc('ccMedia','setPos','60');ipc('ccMedia','keySeek','1');time.sleep(.2)
+ ipc('ccMedia','emitTrack');time.sleep(.2)
+ ipc('ccMedia','keySeek','1');time.sleep(.2)
+ sk=json.loads(ipc('ccMedia','seekPos'));assert sk['log'][-1]==65,'postTrackChanged invalidates the optimistic target: %s'%sk
+ ipc('ccMedia','setLag','0');ipc('ccMedia','setPos','65');ipc('ccMedia','setLen','240');ipc('ccMedia','setTitle','Night drive');ipc('ccMedia','setArtist','Fixture player');time.sleep(.2)
+
+=== Test-results statement ===
+Suite tests/test-batch7.py was run against the tree at commit 6ac53f4 (Radiant development, pinned 6ac53f4037a0b623a3f58fd0382227a7d6019527) in the development test environment: all assertions passed, no QML errors. Harness limits: Media, Audio and other services are mocks driven through IPC probes; the seek key presses invoke the same handler functions the panel Keys handlers call, so they cover handler logic, not physical key delivery or real MPRIS players; nothing ran on a real device.
